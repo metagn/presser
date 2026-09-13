@@ -4,7 +4,7 @@ article
 description "Explaining the design choices in the Nim programming language
 that make multi-platform code, especially code generated for the browser,
 easy to write and manage"
-url: https://metagn.github.io/blog/nim-multiplatform
+url: https://metagn.github.io/presser/nim-multiplatform
 author: metagn
 time: 2024-08-19
 tag "nim" "js"
