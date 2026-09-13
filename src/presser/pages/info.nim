@@ -28,11 +28,11 @@ template getText*(a: RotTerm, name: untyped): bool =
 proc parseInfo*(s: string): Info =
   {.cast(gcsafe).}:
     result = Info(elements: parseRot(s))
-  for p in result.elements.items:
-    if not (p.items.len != 0 and p.items[0].kind == Symbol):
+  for p in result.elements.phrases:
+    if p.head.kind != Symbol:
       continue
-    let name = p.items[0].symbol
-    let body = if p.items.len == 1: rotUnit() else: p.items[^1]
+    let name = p.head.symbol
+    let body = if p.items.len == 1: rotUnit() else: p.items[^1].term
     case name
     of "template":
       if getText(body, text):
@@ -72,7 +72,7 @@ proc parseInfo*(s: string): Info =
     of "tag", "tags":
       if result.isArticle:
         for i in 1 ..< p.items.len:
-          if getText(p.items[i], text):
+          if getText(p.items[i].term, text):
             result.article.tags.add text
     of "twittercard", "twitter_card":
       if result.isArticle and getText(body, text):

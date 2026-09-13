@@ -145,12 +145,13 @@ proc defaultAddHtml(result: var string, name: string, body: RotTerm, a: RotPhras
       res.add("=\"")
       res.add(arg.value)
       res.add('"')
-  for i in 1 ..< a.items.len:
-    if a.items[i].kind == Symbol:
-      addArgument(result, (a.items[i].symbol, ""))
-    elif a.items[i].kind == Association:
-      let left = a.items[i].association.left
-      let right = a.items[i].association.right
+  for ar in a.arguments:
+    if ar.associated.len == 0:
+      if ar.term.kind == Symbol:
+        addArgument(result, (ar.term.symbol, ""))
+    elif ar.associated.len == 1:
+      let left = ar.term
+      let right = ar.associated[0]
       var arg: tuple[name, value: string]
       if left.kind == Symbol:
         arg.name = left.symbol
@@ -171,7 +172,7 @@ proc defaultAddHtml(result: var string, name: string, body: RotTerm, a: RotPhras
     elif body.kind == Text:
       result.add(body.text)
     elif body.kind == Block:
-      for p in body.block.items:
+      for p in body.block.phrases:
         result.addHead(p)
     result.add("</")
     result.add(name)
@@ -185,13 +186,13 @@ proc defaultAddHtml(result: var string, name: string, body: RotTerm, a: RotPhras
       result.add("/>")
 
 proc addHead(result: var string, a: RotPhrase) =
-  if not (a.items.len != 0 and a.items[0].kind == Symbol):
+  if not (a.items.len != 0 and a.head.kind == Symbol):
     for b in a.items:
-      if b.kind == Text:
-        result.add b.text
+      if b.term.kind == Text:
+        result.add b.term.text
     return
-  let name = a.items[0].symbol
-  let body = if a.items.len == 1: rotUnit() else: a.items[^1]
+  let name = a.head.symbol
+  let body = if a.items.len == 1: rotUnit() else: a.items[^1].term
   case name
   of "template", "lazy": discard
   of "background":
@@ -272,7 +273,7 @@ proc toHead*(meta: Info): string =
       result.add("<meta name=\"twitter:card\" content=\"")
       result.add meta.article.twitterCard
       result.add("\"/>")
-  for a in meta.elements.items:
+  for a in meta.elements.phrases:
     addHead(result, a)
 
 proc toHtml*(page: Page, tmpl: string): string =
