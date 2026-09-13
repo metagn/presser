@@ -1,6 +1,6 @@
-import common, pages/[generator, info], std/[tables, os, strutils, json, locks]
+import common, pages/[generator, templates], std/[os, strutils, json]
 
-const MargThreadpoolSize = 1 shl (when defined(gcDestructors): 3 else: 0)
+const DefaultThreadCount = 1 shl (when defined(gcDestructors): 3 else: 0)
 
 type
   Redirect = object
@@ -8,13 +8,12 @@ type
     `type`: int
 
   Pages* = object
-    builder*: Builder
+    config*: Config
     redirects: seq[Redirect]
-    templateLock: Lock
-    templates {.guard: templateLock.}: Table[string, string]
-    defaultTemplate: tuple[path, content: string]
-    margThreads: array[MargThreadpoolSize, Thread[(ptr Pages, ptr Channel[string])]]
-    margChannels: array[MargThreadpoolSize, Channel[string]]
+    templates: Templates
+    # same length:
+    pageThreads: seq[Thread[(ptr Pages, ptr Channel[string])]]
+    pageChannels: seq[Channel[string]]
 
 proc processRedirect(pages: var Pages, path: string): Redirect =
   let s = readFile(path).splitWhitespace()
@@ -22,7 +21,7 @@ proc processRedirect(pages: var Pages, path: string): Redirect =
     echo "redirect file ", path, " does not have url inside"
     return
   result.destination = s[0]
-  result.source = path[pages.builder.outputDir.len ..< ^".redirect".len].replace('\\', '/')
+  result.source = path[pages.config.outputDir.len ..< ^".redirect".len].replace('\\', '/')
   if result.source.len > 1 and result.source[^1] == '/':
     result.source.setLen(result.source.len - 1)
   if s.len > 1 and s[1].len != 0:
@@ -31,7 +30,7 @@ proc processRedirect(pages: var Pages, path: string): Redirect =
     result.type = 301
 
 proc processRedirects(pages: var Pages, path: string): seq[Redirect] =
-  let dir = path[pages.builder.outputDir.len ..< ^".redirects".len].replace('\\', '/')
+  let dir = path[pages.config.outputDir.len ..< ^".redirects".len].replace('\\', '/')
   var f: File
   if not open(f, path):
     echo "could not open redirects file ", path
@@ -51,41 +50,27 @@ proc processRedirects(pages: var Pages, path: string): seq[Redirect] =
     join(redir.source, s[0])
     result.add(redir)
 
-proc getTemplate(pages: var Pages, name: string): lent string =
-  withLock pages.templateLock:
-    if not pages.templates.hasKey(name):
-      pages.templates[name] = readFile(name)
-    result = pages.templates[name]
-  
-proc margger(arg: (ptr Pages, ptr Channel[string])) {.thread.} =
+proc pageProcess(arg: (ptr Pages, ptr Channel[string])) {.thread.} =
   let (pages, chan) = arg
-  let builder = pages.builder
+  let config = pages.config
   while true:
     let f = chan[].recv()
     if f == "": break
-    let page = loadPage(pkMargrave, f)
-    var templ: string
-    if page.info.`template`.len != 0:
-      templ = pages[].getTemplate(page.info.`template`)
-    if templ.len == 0:
-      templ = pages[].defaultTemplate.content
-    let html = page.toHtml(templ)
-    builder.output(f[0..<f.rfind('.')] & ".html", html)
-    echo "margged file: ", f
+    processPage(pkMargrave, f, pages.templates, config)
+    echo "processed page: ", f
 
 proc finishRedirects(pages: var Pages) =
-  if pages.builder.host == githubPages: return
-  if pages.builder.host in {firebase, unspecified}:
-    let config = json.parseFile(pages.builder.templatesDir & "/firebase.json")
+  if Firebase in pages.config.redirectOutputs:
+    let config = json.parseFile(pages.config.templatesDir & "/firebase.json")
     if not config["hosting"].hasKey("redirects"):
       config["hosting"]["redirects"] = %[]
     for r in pages.redirects:
       config["hosting"]["redirects"].add(%r)
     when defined(testrun):
-      writeFile(pages.builder.outputDir & "/firebase.json", pretty(config))
+      writeFile(pages.config.outputDir & "/firebase.json", pretty(config))
     else:
       writeFile("firebase.json", $config)
-  if pages.builder.host in {cloudflare, unspecified}:
+  if Cloudflare in pages.config.redirectOutputs:
     var redirectsFile = ""
     for r in pages.redirects:
       redirectsFile.add(r.source)
@@ -94,42 +79,42 @@ proc finishRedirects(pages: var Pages) =
       redirectsFile.add(' ')
       redirectsFile.addInt(r.type)
       redirectsFile.add("\n")
-    writeFile(pages.builder.outputDir & "/_redirects", redirectsFile)
+    writeFile(pages.config.outputDir & "/_redirects", redirectsFile)
   echo "added redirects to config"
   reset(pages.redirects)
 
-proc finishMargs(pages: var Pages) =
-  joinThreads(pages.margThreads)
-  echo "all margged"
+proc finishPages(pages: var Pages) =
+  joinThreads(pages.pageThreads)
+  echo "all pages processed"
 
-  for i in 0 ..< MargThreadpoolSize:
-    pages.margChannels[i].close()
-  reset(pages.defaultTemplate)
-  withLock pages.templateLock:
-    pages.templates.clear()
-  deinitLock(pages.templateLock)
+  for i in 0 ..< pages.pageChannels.len:
+    pages.pageChannels[i].close()
+  clearTemplates(pages.templates)
 
 proc process*(pages: var Pages) =
-  let builder = pages.builder
-  initLock(pages.templateLock)
-  let defaultTempl = builder.templatesDir & "/default.html"
-  pages.defaultTemplate = (path: defaultTempl, content: pages.getTemplate(defaultTempl))
-  for i in 0 ..< MargThreadpoolSize:
-    pages.margChannels[i].open()
-    createThread(pages.margThreads[i], margger, (addr pages, addr pages.margChannels[i]))
+  let config = pages.config
+  let defaultTempl = config.templatesDir & "/default.html"
+  pages.templates = initTemplates(defaultTempl)
+
+  let threadCount = DefaultThreadCount # power of 2
+  pages.pageThreads.setLen(threadCount)
+  pages.pageChannels.setLen(threadCount)
+  for i in 0 ..< threadCount:
+    pages.pageChannels[i].open()
+    createThread(pages.pageThreads[i], pageProcess, (addr pages, addr pages.pageChannels[i]))
   
   var currentThread = 0
-  for f in walkDirRec(builder.outputDir):
+  for f in walkDirRec(config.outputDir):
     if f.endsWith(".md") or f.endsWith(".mrg"):
-      echo "queueing the enmargging of file: ", f
-      pages.margChannels[currentThread].send(f)
-      currentThread = (currentThread + 1) and (MargThreadpoolSize - 1)
+      echo "queueing the processing of file: ", f
+      pages.pageChannels[currentThread].send(f)
+      currentThread = (currentThread + 1) and (threadCount - 1)
     elif f.endsWith(".redirect"):
       pages.redirects.add processRedirect(pages, f)
     elif f.endsWith(".redirects"):
       pages.redirects.add processRedirects(pages, f)
-  for i in 0 ..< MargThreadpoolSize:
-    pages.margChannels[i].send("")
+  for i in 0 ..< threadCount:
+    pages.pageChannels[i].send("")
 
   pages.finishRedirects()
-  pages.finishMargs()
+  pages.finishPages()

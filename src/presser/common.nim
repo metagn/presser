@@ -1,23 +1,21 @@
 import std/[strutils, os]
 
-type SiteHost* = enum
-  unspecified
-  firebase
-  cloudflare
-  githubPages
+type RedirectOutputKind* = enum
+  Firebase
+  Cloudflare
 
-type Builder* = ref object
+type Config* = object
   pagesDir*, assetsDir*: string
   templatesDir*: string
   outputDir*: string
-  host*: SiteHost
+  redirectOutputs*: set[RedirectOutputKind]
 
-proc output*(builder: Builder, filename: string, content: string) =
+proc output*(config: Config, filename: string, content: string) =
   var fn = filename
   fn.removePrefix({AltSep, DirSep})
-  assert fn.startsWith(builder.outputDir) and
-    fn.len > builder.outputDir.len + 1 and
-    fn[builder.outputDir.len] in {AltSep, DirSep}, "stick to output folder"
+  assert fn.startsWith(config.outputDir) and
+    fn.len > config.outputDir.len + 1 and
+    fn[config.outputDir.len] in {AltSep, DirSep}, "stick to output folder"
   writeFile(fn, content)
 
 type Step* = concept
@@ -27,7 +25,7 @@ proc finish*(step: Step) = discard
 
 import std/macros
 
-macro pipeline*(builder: Builder, body: untyped) =
+macro pipeline*(config: Config, body: untyped) =
   result = newStmtList()
   var variables: seq[NimNode]
   for b in body:
@@ -38,7 +36,7 @@ macro pipeline*(builder: Builder, body: untyped) =
     result.add(b)
 
   for v in variables:
-    result.add(newAssignment(newDotExpr(v, ident"builder"), builder))
+    result.add(newAssignment(newDotExpr(v, ident"config"), config))
   
   for v in variables:
     result.add(newCall(ident"process", v))

@@ -1,23 +1,23 @@
 import presser/[common, pages], os, strutils
 
 proc main() =
-  var builder = Builder(
+  var config = Config(
     pagesDir: "pages",
     assetsDir: "assets",
     templatesDir: "assets/templates",
     outputDir: (when defined(testrun): "output" else: "public"),
-    host:
+    redirectOutputs:
       case getEnv("SITE_HOST").toLowerAscii
-      of "firebase": firebase
-      of "cloudflare": cloudflare
-      of "githubpages": githubPages
-      else: unspecified
+      of "firebase": {Firebase}
+      of "cloudflare": {Cloudflare}
+      of "githubpages": {} # githubPages
+      else: {Firebase, Cloudflare} # all kinds
   )
 
-  copyDir(builder.pagesDir, builder.outputDir)
-  copyDir(builder.assetsDir, builder.outputDir / builder.assetsDir)
+  copyDir(config.pagesDir, config.outputDir)
+  copyDir(config.assetsDir, config.outputDir / config.assetsDir)
   
-  pipeline(builder):
+  pipeline(config):
     var
       pages: Pages
 
