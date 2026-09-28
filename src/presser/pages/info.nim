@@ -27,7 +27,7 @@ template getText*(a: RotTerm, name: untyped): bool =
 
 proc parseInfo*(s: string): Info =
   {.cast(gcsafe).}:
-    result = Info(elements: parseRot(s))
+    result = Info(elements: parseRotBlock(s))
   for p in result.elements.phrases:
     if p.head.kind != Symbol:
       continue
